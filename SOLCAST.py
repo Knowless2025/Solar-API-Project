@@ -1,53 +1,169 @@
 import requests
 from datetime import datetime, timedelta
+import schedule
+import time
+import os
 
-# Solcast API URL - ปรับแก้ให้ดึงข้อมูล 24 ชั่วโมง
-url = "https://api.solcast.com.au/data/forecast/radiation_and_weather?latitude=12.8760497&longitude=101.0916021&hours=24&output_parameters=ghi&period=PT30M&format=json"
+# --- 1. CONFIGURATION (กรุณาตั้งค่าตัวแปรในส่วนนี้) ---
 
-# ใส่ API Key ของคุณตรงนี้
-api_key = "KelYCfROII1uii4Bwt-i6zV6XqzGrMqx" # หมายเหตุ: เพื่อความปลอดภัย ควรเก็บ API Key เป็นความลับ
+# API Keys & IDs
+# หมายเหตุ: เพื่อความปลอดภัยในการใช้งานจริง ควรเก็บ Key เป็น Environment Variables
+# แทนการใส่ในโค้ดโดยตรง
+SOLCAST_API_KEY = "KelYCfROII1uii4Bwt-i6zV6XqzGrMqx"
+OPENWEATHER_API_KEY = "40efb028358b9bae4bfd0c2643b2a402" 
+TELEGRAM_BOT_TOKEN = "7165717388:AAEpj8xC8dlBc9GruW-9iNqTKNWDvYS3Uh8"
+TELEGRAM_CHAT_ID = "7738622893" # <-- 🚧 หากเป็น ID กลุ่ม, ต้องขึ้นต้นด้วย - (เช่น "-100123456789")
 
-# ค่าระบบของโรงงาน
-panel_area_m2 = 37827.32      # พื้นที่แผงรวม (m²)
-efficiency = 0.18          # ประสิทธิภาพแผง (18%)
-interval_hr = 0.5          # ช่วงเวลาทุก 30 นาที
+# Location Coordinates
+LATITUDE = 12.8760497
+LONGITUDE = 101.0916021
 
-# ตัวแปรสำหรับเก็บยอดรวมพลังงาน
-total_energy_kwh = 0
+# Solar Panel System Parameters
+PANEL_AREA_M2 = 37827.32
+EFFICIENCY = 0.15
+INTERVAL_HR = 0.5
 
-# ดึงข้อมูลจาก API
-headers = {"Authorization": f"Bearer {api_key}"}
-response = requests.get(url, headers=headers)
 
-if response.status_code == 200:
-    data = response.json()
-    forecasts = data.get("forecasts", [])
+# --- 2. FUNCTIONS (ส่วนของฟังก์ชันการทำงาน) ---
 
-    print("🌞 พยากรณ์แสงอาทิตย์และพลังงานที่คาดว่าจะผลิตได้ (เฉพาะช่วงกลางวัน):\n")
+def get_solar_forecast():
+    """
+    ดึงข้อมูลพยากรณ์การผลิตพลังงานแสงอาทิตย์จาก Solcast API
+    และคำนวณพลังงานรวมที่คาดว่าจะผลิตได้ในหน่วย kWh
+    """
+    print("Fetching Solcast forecast...")
+    url = f"https://api.solcast.com.au/data/forecast/radiation_and_weather?latitude={LATITUDE}&longitude={LONGITUDE}&hours=24&output_parameters=ghi&period=PT30M&format=json"
+    headers = {"Authorization": f"Bearer {SOLCAST_API_KEY}"}
     
-    for entry in forecasts:
-        # ดึงค่า GHI (Global Horizontal Irradiance)
-        ghi = entry.get("ghi", 0)  # W/m²
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()  # หาก Status Code ไม่ใช่ 2xx จะเกิด Exception
 
-        # --- กรองข้อมูลเฉพาะช่วงกลางวัน ---
-        if ghi > 0:
-            # เวลาใน UTC → เปลี่ยนเป็นเวลาไทย
-            utc_time = datetime.fromisoformat(entry["period_end"].replace("Z", "+00:00"))
-            thai_time = utc_time + timedelta(hours=7)
-            time_str = thai_time.strftime('%Y-%m-%d %H:%M')
+        data = response.json()
+        forecasts = data.get("forecasts", [])
+        total_energy_kwh = 0
 
-            # คำนวณพลังงานที่ผลิตได้ (kWh) ในแต่ละช่วงเวลา
-            energy_kwh = (ghi * panel_area_m2 * efficiency * interval_hr) / 1000
-            
-            # --- บวกค่าพลังงานเข้ายอดรวม ---
-            total_energy_kwh += energy_kwh
+        for entry in forecasts:
+            ghi = entry.get("ghi", 0)
+            if ghi > 0:
+                # คำนวณพลังงานที่ผลิตได้ในแต่ละช่วงเวลา
+                energy_kwh = (ghi * PANEL_AREA_M2 * EFFICIENCY * INTERVAL_HR) / 1000
+                total_energy_kwh += energy_kwh
+        
+        print(f"Solcast forecast successful. Total estimated energy: {total_energy_kwh:.2f} kWh")
+        return total_energy_kwh
 
-            print(f"เวลา: {time_str} | GHI: {ghi:<4.0f} W/m² | พลังงานที่คาดว่าจะได้: {energy_kwh:>6.2f} kWh")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching Solcast data: {e}")
+        return None
 
-    # --- แสดงผลสรุป ---
-    print("\n" + "="*50)
-    print(f"✅ สรุปพลังงานที่คาดว่าจะผลิตได้ทั้งหมดในวันนี้: {total_energy_kwh:.2f} kWh")
-    print("="*50)
+def get_current_weather():
+    """
+    ดึงข้อมูลสภาพอากาศปัจจุบันจาก OpenWeatherMap API
+    และสร้างข้อความสรุปสภาพอากาศ
+    """
+    print("Fetching current weather...")
+    # เพิ่ม &lang=th เพื่อให้คำอธิบายสภาพอากาศเป็นภาษาไทย
+    url = f"https://api.openweathermap.org/data/2.5/weather?lat={LATITUDE}&lon={LONGITUDE}&appid={OPENWEATHER_API_KEY}&units=metric&lang=th"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
 
-else:
-    print(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {response.status_code} - {response.text}")
+        data = response.json()
+        description = data['weather'][0]['description'].capitalize()
+        temp = data['main']['temp']
+        humidity = data['main']['humidity']
+        
+        # จัดรูปแบบข้อความสรุป
+        weather_summary = (
+            f"ท้องฟ้า: {description}\n"
+            f"อุณหภูมิ: {temp}°C\n"
+            f"ความชื้น: {humidity}%"
+        )
+        print("OpenWeatherMap data successful.")
+        return weather_summary
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching OpenWeatherMap data: {e}")
+        return "ไม่สามารถดึงข้อมูลสภาพอากาศได้"
+    except (KeyError, IndexError):
+        print("❌ Error parsing weather data. Check API response format.")
+        return "ไม่สามารถแปลข้อมูลสภาพอากาศได้"
+
+
+def send_telegram_message(message_text):
+    """
+    ส่งข้อความที่กำหนดไปยัง Telegram Bot โดยใช้ Parse Mode เป็น Markdown
+    """
+    print("Sending message to Telegram...")
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message_text,
+        "parse_mode": "Markdown" # ใช้ Markdown เพื่อจัดรูปแบบข้อความ (ตัวหนา, ตัวเอียง)
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        print("✅ Message sent successfully to Telegram!")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error sending message to Telegram: {e}\nResponse: {e.response.text}")
+
+
+# --- 3. MAIN JOB (ส่วนการทำงานหลัก) ---
+
+def create_and_send_report():
+    """
+    สร้างรายงานโดยการดึงข้อมูลจาก API ทั้งสอง และส่งไปยัง Telegram
+    """
+    print("\n--- Running daily report job ---")
+    # ตั้งค่าโซนเวลาเป็นของไทย (UTC+7) สำหรับแสดงวันที่
+    thai_time = datetime.utcnow() + timedelta(hours=7)
+    today_str = thai_time.strftime('%d %B %Y')
+    
+    total_energy = get_solar_forecast()
+    weather_info = get_current_weather()
+    
+    if total_energy is not None:
+        # สร้างข้อความสรุปสำหรับวันที่ดึงข้อมูลสำเร็จ
+        message = (
+            f"☀️ *พยากรณ์การผลิตไฟฟ้าพลังงานแสงอาทิตย์*\n"
+            f"📅 *ประจำวันที่: {today_str}*\n"
+            f"----------------------------------------\n"
+            f"⚡️ *พลังงานที่คาดว่าจะผลิตได้ทั้งหมด:*\n"
+            f"`{total_energy:,.2f} kWh`\n\n"
+            f"🌦️ *สภาพอากาศปัจจุบัน:*\n"
+            f"{weather_info}\n"
+            f"----------------------------------------\n"
+            f"_Automation by AEI Dept._"
+        )
+    else:
+        # สร้างข้อความแจ้งเตือนเมื่อดึงข้อมูล Solcast ไม่สำเร็จ
+        message = (
+            f"⚠️ *แจ้งเตือน: ไม่สามารถดึงข้อมูลพยากรณ์ได้*\n"
+            f"📅 *วันที่: {today_str}*\n"
+            f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Solcast API กรุณาตรวจสอบระบบ"
+        )
+        
+    send_telegram_message(message)
+    print("--- Job finished ---")
+
+
+# --- 4. SCHEDULER (ส่วนการตั้งเวลา) ---
+
+if __name__ == "__main__":
+    print("🚀 Automation script started. Waiting for scheduled time...")
+    
+    # --- สำหรับทดสอบการทำงานทันที (เอา comment ด้านล่างออกเพื่อทดสอบ) ---
+    create_and_send_report()
+    
+    # --- ตั้งเวลาให้ทำงานทุกวัน เวลา 06:00 น. ---
+    # เวลาที่ตั้งนี้จะเป็นเวลาของเครื่องที่รันสคริปต์
+    schedule.every().day.at("06:00").do(create_and_send_report)
+    
+    # Loop เพื่อให้โปรแกรมทำงานและรอเวลาที่กำหนด
+    while True:
+        schedule.run_pending()
+        time.sleep(1)

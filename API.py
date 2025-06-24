@@ -23,4 +23,4 @@ if response.status_code == 200:
     print(f"🌬️ ความเร็วลม: {data['wind']['speed']} m/s")
 else:
     print("❌ ไม่สามารถดึงข้อมูลได้:", response.status_code)
-
+3
