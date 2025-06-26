@@ -104,13 +104,13 @@
             }
         };
 
-        // Data for individual machine cards including previous day's data
+        // Data for individual machine cards including production data for efficiency calculation
         const machineData = [
-            { name: 'CNC-01', currentKwh: 1120, previousDayKwh: 1085 },
-            { name: 'Injection-A', currentKwh: 2450, previousDayKwh: 2510 },
-            { name: 'Welding-R5', currentKwh: 890, previousDayKwh: 890 },
-            { name: 'Assembly-L2', currentKwh: 750, previousDayKwh: 780 },
-            { name: 'Painting-01', currentKwh: 1830, previousDayKwh: 1755 },
+            { name: 'CNC-01', currentKwh: 1120, previousDayKwh: 1085, productionKg: 5500 },
+            { name: 'Injection-A', currentKwh: 2450, previousDayKwh: 2510, productionKg: 12000 },
+            { name: 'Welding-R5', currentKwh: 890, previousDayKwh: 890, productionKg: 4000 },
+            { name: 'Assembly-L2', currentKwh: 750, previousDayKwh: 780, productionKg: 15000 },
+            { name: 'Painting-01', currentKwh: 1830, previousDayKwh: 1755, productionKg: 9000 },
         ];
 
         const barChartData = [
@@ -145,19 +145,33 @@
                 const change = machine.previousDayKwh > 0 ? ((machine.currentKwh - machine.previousDayKwh) / machine.previousDayKwh) * 100 : 0;
                 const isIncrease = change > 0;
                 const isDecrease = change < 0;
-                // Red for increase (bad), Green for decrease (good)
                 const changeColor = isIncrease ? 'text-red-400' : (isDecrease ? 'text-green-400' : 'text-gray-400');
                 const changeIcon = isIncrease ? '▲' : (isDecrease ? '▼' : '–');
                 const formattedChange = Math.abs(change).toFixed(1);
+
+                // Efficiency (kWh/Kg) calculation and tooltip generation
+                let efficiencyTooltipHTML = '';
+                if (machine.productionKg && machine.productionKg > 0) {
+                    const efficiency = machine.currentKwh / machine.productionKg;
+                    efficiencyTooltipHTML = `
+                        <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max invisible group-hover:visible bg-gray-600 text-white text-xs rounded-lg py-1 px-3 z-10">
+                            ประสิทธิภาพ: ${efficiency.toFixed(2)} kWh/Kg
+                            <svg class="absolute text-gray-600 h-2 w-full left-0 top-full" x="0px" y="0px" viewBox="0 0 255 255" xml:space="preserve"><polygon class="fill-current" points="0,0 127.5,127.5 255,0"/></svg>
+                        </div>
+                    `;
+                }
 
                 const cardHTML = `
                     <div class="bg-gray-700 p-4 rounded-lg text-center flex flex-col justify-between h-full">
                         <div>
                             <h3 class="font-semibold text-white">${machine.name}</h3>
-                            <p class="text-2xl font-bold text-amber-400 mt-2">${new Intl.NumberFormat('th-TH').format(machine.currentKwh)}</p>
-                            <p class="text-sm text-gray-400">kWh</p>
+                            <div class="relative group inline-block my-1 cursor-pointer">
+                                <p class="text-2xl font-bold text-amber-400">${new Intl.NumberFormat('th-TH').format(machine.currentKwh)}</p>
+                                <p class="text-sm text-gray-400 -mt-1">kWh</p>
+                                ${efficiencyTooltipHTML}
+                            </div>
                         </div>
-                        <div class="text-sm mt-3 ${changeColor}">
+                        <div class="text-sm mt-2 ${changeColor}">
                             <span>${changeIcon} ${formattedChange}%</span>
                             <span class="text-gray-500"> เทียบกับเมื่อวาน</span>
                         </div>
@@ -286,5 +300,6 @@
     </script>
 </body>
 </html>
+
 
 
